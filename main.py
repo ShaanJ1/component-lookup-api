@@ -1,6 +1,9 @@
-def main():
-    print("Hello from codespaces-blank!")
+from fastapi import FastAPI
+import uvicorn
 
+app = FastAPI()
+@app.get("/hello")
+def hello():
+    return {"message": "Hello, RaspAPI!"}
 
-if __name__ == "__main__":
-    main()
+uvicorn.run(app)
