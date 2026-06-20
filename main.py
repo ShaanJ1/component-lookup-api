@@ -2,13 +2,30 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 import uvicorn
 
-app = FastAPI()
+app = FastAPI(
+    # Docs info
+    title="Component Lookup API"
+    summary="An API that allows people to search for specific electronic components and their specifications by scraping external resources and caching them in a database."
+    description="This API was made to help makers quickly find the specifications for electronic comopnents without having to manually search through websites and various datasheets to find the right information."
+    version="1.0.0"
+    redirect_slashes=True # idk if I should keep this on or not
+    )
+
+## Classes ##
+class Component(BaseModel):
+    part_number: str
+    description: str
+    category: str
+    specifications: dict
+
+
+## API Endpoints ##
 
 # fix not working
-# @app.get("/")
-# def read_root():
-#     """Root page"""
-#     return {"Welcome to component lookup api! Navigate through /docs for documentation"}
+@app.get("/")
+async def root():
+    """Root page"""
+    return {"message": "Welcome to component lookup api! Navigate through /docs for documentation"}
 
 @app.get("/health")
 def health():
@@ -24,15 +41,15 @@ def components():
 @app.get("/components/{part_number}")
 def components_part_number(part_number: str):
     """Fetch the specifications for a specific component!"""
-    return {"message:": f"The specs for the {part_number} are...."}
+    return {"message:": f"The specs for the '{part_number}' are...."}
 
 
 @app.get("/components/search")
-def components_search(query: str):
+def components_search(q: str):
     """Search through the database of components!"""
-    return {"message": f"'{query}' has been found"}
+    return {"message": f"'{q}' has been found"}
 
-@app.post("/components")
+@app.put("/components") # post or put?
 def components(part_number: str, object: dict):
     """Manually add a component to the database. Expects part number and a table of specifications. (AUTH REQUIRED)"""
     return {"message": f"The added part was '{part_number}' and the added info was '{object}'"}
