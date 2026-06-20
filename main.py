@@ -19,6 +19,8 @@ class Component(BaseModel):
     description: str
     category: str
     specifications: dict
+    datasheet_url: str
+    source: str
 
 
 ## API Endpoints ##
@@ -49,9 +51,16 @@ def components():
 def components_part_number(part_number: str):
     """Fetch the specifications for a specific component!"""
     
-    scraped_data = fetch_datasheet_url(part_number)
-    if (scraped_data):
-        print(scraped_data)
+    scraped = fetch_datasheet_url(part_number)
+    if (scraped):
+        return Component(
+            part_number = part_number,
+            description = "",
+            category = "",
+            specifications = {},
+            datasheet_url = scraped.datasheet_url,
+            source = scraped.source
+        )
 
 
     # if part_number.upper() == "NE555":## placeholder for testing

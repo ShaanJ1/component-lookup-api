@@ -6,8 +6,14 @@
 
 import requests
 from bs4 import BeautifulSoup
+from pydantic import BaseModel
 
-def fetch_datasheet_url(part_number: str):
+class ScrapedComponent(BaseModel):
+    part_number: str
+    datasheet_url: str
+    source: str
+
+def fetch_datasheet_url(part_number: str) -> ScrapedComponent | None:
     part_number = part_number.upper()
 
     try: 
@@ -17,22 +23,18 @@ def fetch_datasheet_url(part_number: str):
 
         soup = BeautifulSoup(response.text, "html.parser")
  
-        datasheet_link = soup.find('iframe', id="data")
+        a = soup.find('a', class_='download-datasheet')
+        pdf_page = a['href']
 
-        if datasheet_link["src"]:
-            print("Found link!")
+        res = requests.get(pdf_page, allow_redirects=True, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
 
+        if res.url:
+            return ScrapedComponent(
+                datasheet_url=res.url,
+                source="datasheetarchive"
+            )
         else:
-            print("No pdf link found")
-
-        # if datasheet_link:
-        #     return {
-        #         "part_number": part_number,
-        #         "datasheet_url": datasheet_link['href'],
-        #         "source": "datasheetarchive"
-        #     }
-        # else:
-        #     print(f"No datasheet found for {part_number} on DatasheetArchive.")
+            print(f"No datasheet found for {part_number} on DatasheetArchive.")
         
 
     except Exception as e:
