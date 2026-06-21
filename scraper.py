@@ -4,6 +4,7 @@
 # Scrape #2: ....
 # Scrape #3: ....
 
+# ~3s fetch time for datasheetarchive
 
 #potential websites:
 #https://www.findchips.com/
@@ -13,7 +14,6 @@ from bs4 import BeautifulSoup
 from pydantic import BaseModel
 
 class ScrapedComponent(BaseModel):
-    part_number: str
     datasheet_url: str
     source: str
 
@@ -21,7 +21,7 @@ def fetch_datasheet_url(part_number: str) -> ScrapedComponent | None:
     part_number = part_number.upper()
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 
-    Scrape #1: DatasheetArchive
+    # Scrape #1: DatasheetArchive
     try: 
         url = f"https://www.datasheetarchive.com/datasheet/{part_number}"
         response = requests.get(url, headers=headers, timeout=5)

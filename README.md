@@ -2,10 +2,10 @@
 
 An API that searches for manufacturer electronic component specs 
 
-Uses:
+
 FastAPI
 Redis
-SSQAlchemy
+SSQAlchemy + Supabase
 Beautifulsoup
 
 Routes:
