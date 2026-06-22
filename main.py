@@ -3,10 +3,7 @@ from pydantic import BaseModel
 import redis
 import uvicorn
 
-from typing import Optional
-
-import sqlalchemy as sa
-from sqlalchemy import select
+from sqlalchemy import select, text, create_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, Session
 from sqlalchemy.types import JSON
 
@@ -40,7 +37,7 @@ CACHE_TTL = 24 * 60 * 60 # 24 hours in seconds
 
 database_url = os.getenv("DATABASE_URL")
 
-engine = sa.create_engine(database_url)
+engine = create_engine(database_url)
 
 class Base(DeclarativeBase):
     type_annotation_map = {
@@ -70,7 +67,7 @@ class Component(BaseModel):
     source: str
 
 
-# cache functions
+# Cache functions
 
 def get_from_cache(key: str):
     data = redis_client.get(key)
@@ -82,7 +79,9 @@ def get_from_cache(key: str):
         return None
 
 def set_cache(key: str, value: Component):
+    print("Called set_cache")
     redis_client.set(key, value.model_dump_json(), ex = CACHE_TTL)
+    print(f"Set cache for {key} with value of {value.model_dump_json()}")
 
 
 # Health check functions
@@ -90,7 +89,7 @@ def set_cache(key: str, value: Component):
 def check_db_connection():
     with engine.connect() as connection:
         try:
-            connection.execute(sa.text("SELECT 1"))
+            connection.execute(text("SELECT 1"))
             return True
 
         except Exception as e:
@@ -108,7 +107,7 @@ def check_redis_connection():
 
 
 ## API Endpoints ##
-# Prioritize fetching from Redis Cache first for speed, then checks database to make sure, then scrapes external resources if not found at all
+# Prioritize fetching from Redis first for speed, if it fails then check database, then finally scrape external resources
 
 
 ############ fix not working
@@ -118,7 +117,7 @@ def check_redis_connection():
 #     return {"message": "Welcome to Component Lookup API!. Navigate through /docs for documentation"}
 ############
 
-@app.get("/health") # add more detailed metric tracking
+@app.get("/health")
 def health():
     """Get the current API status and api metrics"""
     start_time = time.time_ns()
@@ -151,7 +150,7 @@ def health():
 
 @app.get("/components")
 def components():
-    """Fetch all components currently cached in our database!"""
+    """Fetch all components in our database!"""
 
     with Session(engine) as session:
         query = select(ComponentModel)
@@ -160,15 +159,20 @@ def components():
         for component in components:
             print(f"Fetched {component.part_number} from database")
         
-    return {} # check to see what prints out then add returned components
+    return components
 
 # fetching should go in this order: check cache, db, then scrape external resources
 @app.get("/components/{part_number}", response_model=Component)
 def components_part_number(part_number: str):
     """Fetch the specifications for a specific component!"""    
 
-    upn = part_number.upper() # upper part number
+    upn = part_number.upper() # uppercase part number
     key = f"component:{upn}"
+
+    for key in redis_client.scan_iter(match="*"):
+        print(key)
+
+
 
     # Check cache first
     key = f"component:{upn}"
@@ -176,9 +180,9 @@ def components_part_number(part_number: str):
 
     print(cached)
     if cached:
-        return None
+        return cached
 
-    # Checking database
+    # Checking database as a backup
     with Session(engine) as session:
         component = session.get(ComponentModel, upn)
         if component:
@@ -191,22 +195,32 @@ def components_part_number(part_number: str):
                 datasheet_url = component.datasheet_url,
                 source = component.source
             )
+        else:
+            print(component)
+
 
     ## Scraping external resources
     # Todo: add pdf scraping in scraper.py and make it return all the arguments for a component
     scraped = fetch_datasheet_url(part_number)
     if (scraped):
-        with Session(engine) as session:
-            newComponent = ComponentModel(
-                part_number = part_number,
-                datasheet_url = scraped.datasheet_url,
-                source = scraped.source
-            )
-            session.add(newComponent)
-            session.commit()
+        try:
+            with Session(engine) as session:
+                newComponent = ComponentModel(
+                    part_number = upn,
+                    description = "",
+                    category = "",
+                    specifications = {},
+                    datasheet_url = scraped.datasheet_url,
+                    source = scraped.source
+                )
+                session.add(newComponent)
+                session.commit()
+
+        except Exception as e:
+            print(f"Could not add {part_number} to database: {e}")
     
         result = Component(
-            part_number = part_number,
+            part_number = upn,
             description = "",
             category = "",
             specifications = {},
@@ -217,18 +231,6 @@ def components_part_number(part_number: str):
 
         return result
 
-    # if part_number.upper() == "NE555":## placeholder for testing
-    #     return Component( 
-    #         part_number = "NE555",
-    #         description = "A timer IC",
-    #         category = "Integrated Circuit",
-    #         specifications = {
-    #             "Operating Voltage": "4.5V to 15V",
-    #             "Output Current": "200mA",
-    #             "Frequency Range": "0.001Hz to 2MHz"
-    #         }
-    #     )
-    
     # If all else fails, return a 404
     raise HTTPException(status_code=404, detail="Component not found")
 
