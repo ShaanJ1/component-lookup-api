@@ -15,6 +15,8 @@ from dotenv import load_dotenv
 
 from scraper import fetch_datasheet_url
 
+import time
+
 load_dotenv()
 
 app = FastAPI(
@@ -56,6 +58,8 @@ class ComponentModel(Base):
     
 Base.metadata.create_all(engine)
 
+app_start_time = time.time()
+
 ## Classes ##
 class Component(BaseModel):
     part_number: str
@@ -81,6 +85,28 @@ def set_cache(key: str, value: Component):
     redis_client.set(key, value.model_dump_json(), ex = CACHE_TTL)
 
 
+# Health check functions
+
+def check_db_connection():
+    with engine.connect() as connection:
+        try:
+            connection.execute(sa.text("SELECT 1"))
+            return True
+
+        except Exception as e:
+            print(f"Database connection failed: {e}")
+            return False
+
+def check_redis_connection():
+    try:
+        return redis_client.ping()
+    
+    except Exception as e:
+        print(f"Redis connection failed: {e}")
+        return False
+
+
+
 ## API Endpoints ##
 # Prioritize fetching from Redis Cache first for speed, then checks database to make sure, then scrapes external resources if not found at all
 
@@ -94,11 +120,34 @@ def set_cache(key: str, value: Component):
 
 @app.get("/health") # add more detailed metric tracking
 def health():
-    """Get the current API status and metrics"""
+    """Get the current API status and api metrics"""
+    start_time = time.time_ns()
+    start_time_seconds = start_time / 1_000_000_000
+
+    uptime = start_time_seconds - app_start_time
+
+    db_connection = check_db_connection()
+    redis_connection = check_redis_connection()
+
+    db_status = "down"
+    cache_status = "down"
+
+    if db_connection:
+        db_status = "good"
+
+    if redis_connection:
+        cache_status = "good"
+
+    ping = (time.time_ns() - start_time) / 1_000_000 # ping in ms
     return {
-        "message": "The API is running!",
-        "status": "online"
+        "status": "online",
+        "uptime": f"{round(uptime, 2)} seconds",
+        "ping": f"{round(ping, 2)} milliseconds",
+        "dependencies": {
+            "database": db_status,
+            "cache": cache_status
         }
+    }
 
 @app.get("/components")
 def components():
