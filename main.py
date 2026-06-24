@@ -14,10 +14,12 @@ from scraper import fetch_datasheet_url
 
 from typing import Any
 
+import psutil
 import time
 
 load_dotenv()
 
+# Set up FastAPI app
 app = FastAPI(
     # Docs info
     title="Component Lookup API",
@@ -27,7 +29,7 @@ app = FastAPI(
     #redirect_slashes=True # check if u should keep this on or not
     )
 
-
+# Set up Redi Client
 redis_client = redis.Redis(
     host='localhost', 
     port=6379, 
@@ -35,12 +37,14 @@ redis_client = redis.Redis(
     decode_responses=True
     )
 
+# How long to cache redis data for
 CACHE_TTL = 24 * 60 * 60 # 24 hours in seconds
 
+# start up the database
 database_url = os.getenv("DATABASE_URL")
-
 engine = create_engine(database_url)
 
+## Database Models ##
 class Base(DeclarativeBase):
     type_annotation_map = {
         dict[str, Any]: JSON
@@ -54,7 +58,7 @@ class ComponentModel(Base):
     datasheet_url:  Mapped[str] = mapped_column()
     source:         Mapped[str] = mapped_column()
     
-Base.metadata.create_all(engine)
+Base.metadata.create_all(engine) 
 
 app_start_time = time.time()
 
@@ -67,7 +71,7 @@ class Component(BaseModel):
     source: str
 
 
-# Cache functions
+## Cache functions ##
 def get_from_cache(key: str):
     data = redis_client.get(key)
     if data:
@@ -78,7 +82,6 @@ def get_from_cache(key: str):
         return None
 
 def set_cache(key: str, value: Component):
-    print("Called set_cache")
     redis_client.set(key, value.model_dump_json(), ex = CACHE_TTL)
     print(f"Set cache for {key} with value of {value.model_dump_json()}")
 
@@ -87,11 +90,11 @@ def set_cache(key: str, value: Component):
 def check_db_connection():
     with engine.connect() as connection:
         try:
-            connection.execute(text("SELECT 1"))
+            connection.execute(text("SELECT 1")) # simple query that checks if the database is reachable
             return True
 
         except Exception as e:
-            print(f"Database connection failed. (main.py | line 94): {e}")
+            print(f"Database connection failed. (main.py | line 97): {e}")
             return False
 
 def check_redis_connection():
@@ -99,7 +102,7 @@ def check_redis_connection():
         return redis_client.ping()
     
     except Exception as e:
-        print(f"Redis connection failed. (main.py | line 102): {e}")
+        print(f"Redis connection failed. (main.py | line 105): {e}")
         return False
 
 
@@ -117,9 +120,9 @@ def check_redis_connection():
 def health():
     """Get the current API status and api metrics"""
     start_time = time.time_ns()
-    start_time_seconds = start_time / 1_000_000_000
+    start_time_seconds = start_time / 1_000_000_000 # convert to seconds
 
-    uptime = start_time_seconds - app_start_time
+    uptime = start_time_seconds - app_start_time #
 
     db_connection = check_db_connection()
     redis_connection = check_redis_connection()
@@ -133,11 +136,19 @@ def health():
     if redis_connection:
         cache_status = "good"
 
-    ping = (time.time_ns() - start_time) / 1_000_000 # ping in ms
+    ping = (time.time_ns() - start_time) / 1_000_000 # calculate ping in milliseconds
+    process = psutil.Process(os.getpid()) # get the current process to check system metrics
+
     return {
         "status": "online",
         "uptime": f"{round(uptime, 2)} seconds",
         "ping": f"{round(ping, 2)} milliseconds",
+        "system": {
+            "cpu_usage": f"{psutil.cpu_percent(interval=0.05)}%", # sample interval of 0.05 seconds
+            "memory_usage": f"{round(process.memory_info().rss / 1024 / 1024, 2)} MB", # physical ram used by process, converting bytes to MB
+            "threads": process.num_threads(), # threads used by process
+            "available_memory": f"{round(psutil.virtual_memory().available / 1024 / 1024, 2)} MB" # available memory on system, converting bytes to MB
+        },
         "dependencies": {
             "database": db_status,
             "cache": cache_status
@@ -196,7 +207,7 @@ def components_part_number(part_number: str):
     scraped = fetch_datasheet_url(part_number)
     if (scraped):
         try:
-            with Session(engine) as session:
+            with Session(engine) as session: 
                 newComponent = ComponentModel(
                     part_number = upn,
                     description = scraped.description,
@@ -208,7 +219,7 @@ def components_part_number(part_number: str):
                 session.commit()
 
         except Exception as e:
-            print(f"Could not add {part_number} to database. (main.py | line 211): {e}")
+            print(f"Could not add {part_number} to database. (main.py | line 222): {e}")
     
         result = Component(
             part_number = upn,
