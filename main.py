@@ -12,6 +12,8 @@ from dotenv import load_dotenv
 
 from scraper import fetch_datasheet_url
 
+from typing import Any
+
 import time
 
 load_dotenv()
@@ -20,7 +22,7 @@ app = FastAPI(
     # Docs info
     title="Component Lookup API",
     summary="An API that allows people to search for specific electronic components and their specifications by scraping external resources and caching them in a database.",
-    description="This API was made to help makers quickly find the specifications for electronic comopnents without having to manually search through websites and various datasheets to find the right information. All searches are case-insensitive.",
+    description="This API was made to help people quickly find the specifications for electronic components without having to manually search through websites and various datasheets to find the right information. All searches are case-insensitive.",
     version="1.0.0",
     #redirect_slashes=True # check if u should keep this on or not
     )
@@ -41,15 +43,14 @@ engine = create_engine(database_url)
 
 class Base(DeclarativeBase):
     type_annotation_map = {
-        dict[str, str]: JSON
+        dict[str, Any]: JSON
     }
 
 class ComponentModel(Base):
     __tablename__ = "component"
     part_number:    Mapped[str] = mapped_column(primary_key=True, unique=True)
     description:    Mapped[str | None] = mapped_column()
-    category:       Mapped[str | None] = mapped_column()
-    specifications: Mapped[dict[str, str] | None] = mapped_column()
+    specifications: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     datasheet_url:  Mapped[str] = mapped_column()
     source:         Mapped[str] = mapped_column()
     
@@ -61,14 +62,12 @@ app_start_time = time.time()
 class Component(BaseModel):
     part_number: str
     description: str | None
-    category: str | None
-    specifications: dict[str, str] | None
+    specifications: dict[str, Any] | None
     datasheet_url: str
     source: str
 
 
 # Cache functions
-
 def get_from_cache(key: str):
     data = redis_client.get(key)
     if data:
@@ -85,7 +84,6 @@ def set_cache(key: str, value: Component):
 
 
 # Health check functions
-
 def check_db_connection():
     with engine.connect() as connection:
         try:
@@ -93,7 +91,7 @@ def check_db_connection():
             return True
 
         except Exception as e:
-            print(f"Database connection failed: {e}")
+            print(f"Database connection failed. (main.py | line 94): {e}")
             return False
 
 def check_redis_connection():
@@ -101,14 +99,12 @@ def check_redis_connection():
         return redis_client.ping()
     
     except Exception as e:
-        print(f"Redis connection failed: {e}")
+        print(f"Redis connection failed. (main.py | line 102): {e}")
         return False
 
 
 
 ## API Endpoints ##
-# Prioritize fetching from Redis first for speed, if it fails then check database, then finally scrape external resources
-
 
 ############ fix not working
 # @app.get("/")
@@ -155,10 +151,12 @@ def components():
     with Session(engine) as session:
         query = select(ComponentModel)
         components = session.scalars(query).all()
-        print(components)
         for component in components:
             print(f"Fetched {component.part_number} from database")
         
+    if components == []:
+        components = {"message": "No components found in our database"}
+
     return components
 
 # fetching should go in this order: check cache, db, then scrape external resources
@@ -169,16 +167,8 @@ def components_part_number(part_number: str):
     upn = part_number.upper() # uppercase part number
     key = f"component:{upn}"
 
-    for key in redis_client.scan_iter(match="*"):
-        print(key)
-
-
-
     # Check cache first
-    key = f"component:{upn}"
     cached = get_from_cache(key)
-
-    print(cached)
     if cached:
         return cached
 
@@ -187,29 +177,30 @@ def components_part_number(part_number: str):
         component = session.get(ComponentModel, upn)
         if component:
             print(f"Found {part_number} in database!")
-            return Component(
+            result = Component(
                 part_number = component.part_number,
                 description = component.description,
-                category = component.category,
                 specifications = component.specifications,
                 datasheet_url = component.datasheet_url,
                 source = component.source
             )
+
+            set_cache(key, result) # if found in db but not cache, add it to cache
+
+            return result
         else:
-            print(component)
+            print(f"{part_number} not found in database.")
 
 
     ## Scraping external resources
-    # Todo: add pdf scraping in scraper.py and make it return all the arguments for a component
     scraped = fetch_datasheet_url(part_number)
     if (scraped):
         try:
             with Session(engine) as session:
                 newComponent = ComponentModel(
                     part_number = upn,
-                    description = "",
-                    category = "",
-                    specifications = {},
+                    description = scraped.description,
+                    specifications = scraped.specifications,
                     datasheet_url = scraped.datasheet_url,
                     source = scraped.source
                 )
@@ -217,13 +208,12 @@ def components_part_number(part_number: str):
                 session.commit()
 
         except Exception as e:
-            print(f"Could not add {part_number} to database: {e}")
+            print(f"Could not add {part_number} to database. (main.py | line 211): {e}")
     
         result = Component(
             part_number = upn,
-            description = "",
-            category = "",
-            specifications = {},
+            description = scraped.description,
+            specifications = scraped.specifications,
             datasheet_url = scraped.datasheet_url,
             source = scraped.source
         )
@@ -234,18 +224,12 @@ def components_part_number(part_number: str):
     # If all else fails, return a 404
     raise HTTPException(status_code=404, detail="Component not found")
 
-
-@app.get("/components/search")
-def components_search(q: str):
-    """Search through the database of components!"""
-    return {"message": f"'{q}' has been found"}
-
-@app.put("/components") # post or put?
+@app.put("/components/{part_number}") # post or put?
 def components(part_number: str, object: dict):
     """Manually add a component to the database. Expects part number and a table of specifications. (AUTH REQUIRED)"""
     return {"message": f"The added part was '{part_number}' and the added info was '{object}'"}
 
-@app.delete("/components")
+@app.delete("/components/{part_number}")
 def components(part_number: str):
     """Manually delete a component from the database. Expects a part number. (REQUIRES AUTH)"""
     return {"message": f"Successfully deleted component '{part_number}' from database."}
