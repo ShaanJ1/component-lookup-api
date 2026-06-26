@@ -10,13 +10,14 @@ An API that finds datasheets for all major electronic components and compiles th
 - Input validation and error handling  
 
 ### Tech Stack
-FastAPI - API Framework  
-Uvicorn - ASGI Server  
+API Framework - FastAPI
+ASGI Server - Uvicorn 
 Database - PostgreSQL  
 ORM - SQLAchemy  
 Data Validation - Pydantic  
 AI - Google AI API  
 Dependency Manager - uv  
+Rate limiter - SlowAPI
 
 ### Clone Repository
 - Clone this repository  

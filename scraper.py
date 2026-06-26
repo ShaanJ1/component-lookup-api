@@ -61,6 +61,8 @@ def parse_pdf(pdf_bytes: bytes, part_number: str, model_name: str) -> dict | Non
         12. Adapt the structure to the actual data presented in the datasheet rather than forcing all specifications into a single format
         13. Preserve original parameter names as much as possible, but you may normalize them if necessary for clarity
         14. Return only information that is present in the datasheet
+        15. Include pinout information at the start of the specifications object if PRESENT in the datasheet, otherwise omit
+        16. Include the available package types at the start of the specifications object if PRESENT in the datasheet, otherwise omit. It's better to omit true information than to fabricate it.
         
         Return Valid JSON Data Only.
 
@@ -136,7 +138,7 @@ def parse_pdf(pdf_bytes: bytes, part_number: str, model_name: str) -> dict | Non
         "part_number": "",
         "manufacturer": "",
         "description": "",
-        "specifications": {{}}
+        "specifications": {{}},
         }}
 
         Specifications Organization
@@ -227,7 +229,7 @@ def parse_pdf(pdf_bytes: bytes, part_number: str, model_name: str) -> dict | Non
     except Exception as e:
 
         if not hasattr(e, "code"):
-            print(f"Error parsing PDF for {part_number} (scraper.py | line 230): {e}")
+            print(f"Error parsing PDF for {part_number} (scraper.py | line 232): {e}")
             return None
 
         # If model is experiencing high demand, try other models in the list
@@ -254,7 +256,7 @@ def parse_pdf(pdf_bytes: bytes, part_number: str, model_name: str) -> dict | Non
             else:
                 print("All AI models have been tried and failed. Could not complete request.")
 
-        print(f"Error parsing PDF for {part_number} (scraper.py | line 257): {e}")
+        print(f"Error parsing PDF for {part_number} (scraper.py | line 259): {e}")
         return None
 
 def fetch_datasheet_url(part_number: str) -> ScrapedComponent | None:
@@ -277,9 +279,9 @@ def fetch_datasheet_url(part_number: str) -> ScrapedComponent | None:
         pdf_page = download_btn['href']
         pdf_response = requests.get(pdf_page, allow_redirects=True, headers=headers, timeout=10)
 
-        description = None
+        description = ""
         desc = soup.find('span', class_='j-description')
-
+        
         if desc:
             description = desc.getText()
 
@@ -315,7 +317,7 @@ def fetch_datasheet_url(part_number: str) -> ScrapedComponent | None:
         )
 
     except Exception as e:
-        print(f"Scrape #1 (DatasheetArchive) failed for {part_number} (scraper.py | line 308): {e}")
+        print(f"Scrape #1 (DatasheetArchive) failed for {part_number} (scraper.py | line 320): {e}")
 
 
     return None 

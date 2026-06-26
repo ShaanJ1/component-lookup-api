@@ -1,7 +1,10 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 import redis
 import uvicorn
+
+import requests
 
 from sqlalchemy import select, text, create_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, Session
@@ -10,14 +13,27 @@ from sqlalchemy.types import JSON
 import os
 from dotenv import load_dotenv
 
-from scraper import fetch_datasheet_url
+from scraper import fetch_datasheet_url, parse_pdf, models
 
 from typing import Any
 
 import psutil
 import time
 
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+
 load_dotenv()
+
+redis_host ="localhost"
+redis_port = 6379
+
+# Set up rate limiter
+limiter = Limiter(
+    key_func = get_remote_address, 
+    storage_uri = f"redis://{redis_host}:{redis_port}" 
+    ) 
 
 # Set up FastAPI app
 app = FastAPI(
@@ -29,16 +45,18 @@ app = FastAPI(
     #redirect_slashes=True # check if u should keep this on or not
     )
 
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
 # Set up Redi Client
 redis_client = redis.Redis(
-    host='localhost', 
-    port=6379, 
+    host=redis_host, 
+    port=redis_port, 
     db=0, 
     decode_responses=True
     )
 
-# How long to cache redis data for
-CACHE_TTL = 24 * 60 * 60 # 24 hours in seconds
+CACHE_TTL = 24 * 60 * 60 # cache redis data for 24hr
 
 # start up the database
 database_url = os.getenv("DATABASE_URL")
@@ -94,7 +112,7 @@ def check_db_connection():
             return True
 
         except Exception as e:
-            print(f"Database connection failed. (main.py | line 97): {e}")
+            print(f"Database connection failed. (main.py | line 115): {e}")
             return False
 
 def check_redis_connection():
@@ -102,10 +120,21 @@ def check_redis_connection():
         return redis_client.ping()
     
     except Exception as e:
-        print(f"Redis connection failed. (main.py | line 105): {e}")
+        print(f"Redis connection failed. (main.py | line 123): {e}")
         return False
 
+## Custom API Ratelimit Message
 
+@app.exception_handler(RateLimitExceeded)
+def handle_rate_limit_exceeded(request: Request, exc: RateLimitExceeded):
+    return JSONResponse(
+        status_code=exc.status_code, # 429
+        content={
+            "error": "Too Many Requests",
+            "message": "You have exceeded the API's rate limit. Please try again later.",
+            "retry_after": f"{exc.limit.limit.get_expiry()} second/s"
+            }
+    )
 
 ## API Endpoints ##
 
@@ -117,7 +146,8 @@ def check_redis_connection():
 ############
 
 @app.get("/health")
-def health():
+@limiter.limit("1/second") # limit to 1 request per second
+def health(request: Request):
     """Get the current API status and api metrics"""
     start_time = time.time_ns()
     start_time_seconds = start_time / 1_000_000_000 # convert to seconds
@@ -156,7 +186,8 @@ def health():
     }
 
 @app.get("/components")
-def components():
+@limiter.limit("30/minute") # limit to 30 requests per minute
+def components(request: Request):
     """Fetch all components in our database!"""
 
     with Session(engine) as session:
@@ -172,7 +203,8 @@ def components():
 
 # fetching should go in this order: check cache, db, then scrape external resources
 @app.get("/components/{part_number}", response_model=Component)
-def components_part_number(part_number: str):
+@limiter.limit("20/minute") # limit to 20 requests per minute
+def components_part_number(request: Request, part_number: str):
     """Fetch the specifications for a specific component!"""    
 
     upn = part_number.upper() # uppercase part number
@@ -219,7 +251,7 @@ def components_part_number(part_number: str):
                 session.commit()
 
         except Exception as e:
-            print(f"Could not add {part_number} to database. (main.py | line 222): {e}")
+            print(f"Could not add {part_number} to database. (main.py | line 254): {e}")
     
         result = Component(
             part_number = upn,
@@ -235,14 +267,101 @@ def components_part_number(part_number: str):
     # If all else fails, return a 404
     raise HTTPException(status_code=404, detail="Component not found")
 
+@app.get("/components/sync")
+@limiter.limit("40/minute") # limit to 40 requests per minute
+def components(request: Request, part_number: str, object: dict):
+    """."""
+
+@app.get("/components/update/{part_number}")
+@limiter.limit("10/minute") # limit to 10 requests per minute
+def components(request: Request, part_number: str, object: dict):
+    """."""
+
+@app.get("/components/updatespecs/{part_number}")
+@limiter.limit("10/minute") # limit to 10 requests per minute
+def components(request: Request, part_number: str, object: dict):
+    """."""
+    """Fill out the missing specifications for a specific component."""
+    datasheet_url = ""
+
+    try:
+        with Session(engine) as session:
+            component = session.get(ComponentModel, part_number.upper())
+            datasheet_url = component.datasheet_url
+
+    except Exception as e:
+        print(f"Could not fetch datasheet URL from database for {part_number}. (main.py | line 293): {e}")
+        raise HTTPException(status_code=404, detail="Could not fetch datasheet URL from database")
+
+    if datasheet_url == "" or datasheet_url is None: # if the component is not in the database/datasheet url is empty, refetch the datasheet
+        scraped = fetch_datasheet_url(part_number.upper())
+        if not scraped:
+            print(f"Could not fetch datasheet URL from external resources for {part_number}.")
+            raise HTTPException(status_code=404, detail="Could not fetch datasheet URL from external resources")
+        
+
+        try: # add new fetched data to database
+            datasheet_url = scraped.datasheet_url
+            with Session(engine) as session:
+                newComponent = ComponentModel(
+                    part_number = part_number.upper(),
+                    description = scraped.description,
+                    specifications = scraped.specifications,
+                    datasheet_url = scraped.datasheet_url,
+                    source = scraped.source
+                )
+                session.add(newComponent)
+                session.commit()
+
+            set_cache(f"component:{part_number.upper()}", Component(
+                part_number = part_number.upper(),
+                description = scraped.description,
+                specifications = scraped.specifications,
+                datasheet_url = scraped.datasheet_url,
+                source = scraped.source
+            ))
+
+        except Exception as e:
+            print(f"Could not fetch datasheet URL from database for {part_number}. (main.py | line 325): {e}")
+            raise HTTPException(status_code=404, detail="Could not fetch datasheet from database")
+
+
+    response = requests.get(datasheet_url)
+    if not response.status_code == 200:
+        print(f"Could not fetch datasheet from URL: {datasheet_url}")
+        raise HTTPException(status_code=404, detail="Could not fetch datasheet from URL")
+
+    parsed = parse_pdf(response.content, part_number, models[0])
+
+    if not parsed:
+        print(f"Could not parse datasheet for {part_number}")
+        raise HTTPException(status_code=404, detail="Could not parse datasheet for component")
+    
+    component = Component()
+    
+## AUTH PROTECTED ENDPOINTS ##
+
+@app.get("/components/fillmissingspecs")
+@limiter.limit("5/minute") # limit to 5 requests per minute
+def components(request: Request, part_number: str):
+    """Fill out the missing specifications for all components. (AUTH REQUIRED)"""
+
+@app.get("/components/viewsaves/{part_number}")
+@limiter.limit("50/minute") # limit to 50 requests per minute
+def components(request: Request, part_number: str, object: dict):
+    """View the past versions of a specific component. (AUTH REQUIRED)"""
+
+
 @app.put("/components/{part_number}") # post or put?
-def components(part_number: str, object: dict):
+@limiter.limit("20/minute") # limit to 20 requests per minute
+def components(request: Request, part_number: str, object: dict):
     """Manually add a component to the database. Expects part number and a table of specifications. (AUTH REQUIRED)"""
     return {"message": f"The added part was '{part_number}' and the added info was '{object}'"}
 
 @app.delete("/components/{part_number}")
-def components(part_number: str):
-    """Manually delete a component from the database. Expects a part number. (REQUIRES AUTH)"""
+@limiter.limit("20/minute") # limit to 20 requests per minute
+def components(request: Request, part_number: str):
+    """Manually delete a component from the database. Expects a part number. (AUTH REQUIRED)"""
     return {"message": f"Successfully deleted component '{part_number}' from database."}
 
 
