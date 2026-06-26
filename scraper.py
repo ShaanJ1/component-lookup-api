@@ -36,7 +36,7 @@ def parse_pdf(pdf_bytes: bytes, part_number: str, model_name: str) -> dict | Non
     model_attempt = 0
     try:
         prompt = f"""
-        You are extracting specifications from an electronic component datasheet pdf.
+        You are extracting specifications from a pdf of an electronic component's datasheet.
         
         TARGET PART NUMBER: {part_number}
 
@@ -283,7 +283,7 @@ def fetch_datasheet_url(part_number: str) -> ScrapedComponent | None:
         if desc:
             description = desc.getText()
 
-        if pdf_response.headers.get('Content-Type') != 'application/pdf': # datasheet not a pdf file
+        if pdf_response.headers.get('Content-Type') != 'application/pdf': # datasheet is not a pdf file
             return ScrapedComponent( 
                 part_number = part_number,
                 description = description,
@@ -295,6 +295,16 @@ def fetch_datasheet_url(part_number: str) -> ScrapedComponent | None:
         print("Extracting data from datasheet with AI")
 
         ai_result = parse_pdf(pdf_response.content, part_number, models[0]) # try first model
+
+        if not ai_result:
+            print(f"AI parsing failed for {part_number}, returning empty specifications.")
+            return ScrapedComponent(
+                part_number = part_number,
+                description = description,
+                specifications = {},
+                datasheet_url = pdf_response.url,
+                source = "datasheetarchive"
+            )
 
         return ScrapedComponent(
             part_number = part_number,
