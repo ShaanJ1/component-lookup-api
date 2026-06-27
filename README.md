@@ -6,7 +6,7 @@ An API that finds datasheets for all major electronic components and compiles th
 - Caching + Database  
 - Rate limiting  
 - AI powered pdf data extraction  
-- 11 total endpoints  
+- 10 total endpoints  
 - Input validation and error handling  
 
 ### Tech Stack
@@ -22,7 +22,7 @@ Rate limiter - SlowAPI
 ### Clone Repository
 - Clone this repository  
 - Install [`uv`](https://docs.astral.sh/uv/getting-started/installation/)  
-- Create a `.env` file with your GOOGLE_API_KEY and postgres DATABASE_URL  
+- Create a `.env` file with your `GOOGLE_API_KEY`, a random `API_KEY` and a postgres `DATABASE_URL`  
 - Install the project dependencies with  `uv sync`  
 - Run the program with `uv run main.py`  
 
@@ -40,9 +40,10 @@ Rate limiter - SlowAPI
 Here are some error responses the API may produce.
 | Status | Description |
 | :----: | :---------- |
-|   400  | Invalid Request |
+|   400  | Bad Request |
 |   401  | Authentication Required |
 |   404  | Component not found |
+|   409  | Database Integrity Error |
 |   429  | Rate Limit Exceeded |
 |   500  | Internal Server Error |
 

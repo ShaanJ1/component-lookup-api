@@ -48,7 +48,7 @@ def handle_rate_limit_exceeded(request: Request, exc: RateLimitExceeded):
         content={
             "error": "Too Many Requests",
             "message": "You have exceeded the API's rate limit. Please try again later.",
-            "retry_after": f"{exc.limit.limit.get_expiry()} second/s"
+            "cooldown": f"{exc.limit.limit.get_expiry()} second/s"
             }
     )
 
@@ -62,7 +62,7 @@ def check_db_connection():
             return True
 
         except Exception as e:
-            print(f"Database connection failed. (main.py | line 115): {e}")
+            print(f"Database connection failed. (main.py | line 65): {e}")
             return False
 
 def check_redis_connection():
@@ -71,17 +71,10 @@ def check_redis_connection():
         return redis_client.ping()
     
     except Exception as e:
-        print(f"Redis connection failed. (main.py | line 123): {e}")
+        print(f"Redis connection failed. (main.py | line 74): {e}")
         return False
 
 ## API Endpoints ##
-
-############ fix not working
-@app.get("/")
-async def root():
-    """Root page"""
-    return {"message": "Welcome to Component Lookup API!. Navigate through /docs for documentation"}
-############
 
 @app.get("/health")
 @limiter.limit("1/second") # limit to 1 request per second
@@ -123,5 +116,10 @@ def health(request: Request):
         }
     }
 
+@app.get("/")
+async def root():
+    """Root page"""
+    return {"message": "Welcome to Component Lookup API!. Navigate through /docs for documentation"}
+
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True) # 127.0.0.1 for local testing, 0.0.0.0 for production

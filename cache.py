@@ -20,10 +20,8 @@ def get_from_cache(key: str):
         print(f"Cache found for {key}")
         return ComponentResponse.model_validate_json(data)
     
-    print(f"Cache not found for {key}")
     return None
 
 def set_cache(key: str, value: ComponentResponse):
     """Set a component in the cache with a key"""
     redis_client.set(key, value.model_dump_json(), ex = CACHE_TTL)
-    print(f"Set cache for {key} with value of {value.model_dump_json()}")
