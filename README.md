@@ -57,7 +57,6 @@ Base link: .....
 |   GET   |   ❌   | /health                                    | View detailed health metrics of the API        |
 |   GET   |   ❌   | /components                                | View the list of components stored in our database. Optionally, you can add the parameters ?page=1&limit=20 |
 |   GET   |   ❌   | /components/{part_number}                  | Fetch the specifications for your requested part. Will return a 000 Component not found error if our sources didn't have that component. Its normal to allow up to ~1 minute for a response if the part is not in our database and we have to actively fetch it. A majority of the time taken is waiting for the AI to compile the information. |
-|   GET   |   ❌   | /components/sync                           | Sync the API's cache with the database (This shouldn't normally be used as the system rarely fails, but made as a fail safe if something goes wrong) |
 |   GET   |   ❌   | /components/update/{part_number}           | Refetches all the data again for a specific component |
 |   GET   |   ❌   | /components/updatespecs/{part_number}      | Forces a refresh for a specific part's specification |
 |   GET   |   ✅   | /components/fillmissingspecs               | Cycles through every part in the database with missing information due to AI limits, and attempts to fill them in again |

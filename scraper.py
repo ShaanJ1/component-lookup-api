@@ -33,6 +33,7 @@ class ScrapedComponent(BaseModel):
 
 # extract component specifications from a pdf datasheet
 def parse_pdf(pdf_bytes: bytes, part_number: str, model_name: str) -> dict | None:  # fetch time ~20-60 seconds (depending on model)
+    """Parses a PDF datasheet using AI and extracts all relevant data for a specific component."""
     model_attempt = 0
     try:
         prompt = f"""
@@ -259,7 +260,8 @@ def parse_pdf(pdf_bytes: bytes, part_number: str, model_name: str) -> dict | Non
         print(f"Error parsing PDF for {part_number} (scraper.py | line 259): {e}")
         return None
 
-def fetch_datasheet_url(part_number: str) -> ScrapedComponent | None:
+def fetch_datasheet_url(part_number: str, skip_ai: bool = False) -> ScrapedComponent | None:
+    """Fetch the datasheet URL and all other relevant info for a specific component by scraping external resources."""
     part_number = part_number.upper()
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 
@@ -293,6 +295,17 @@ def fetch_datasheet_url(part_number: str) -> ScrapedComponent | None:
                 datasheet_url = pdf_response.url,
                 source = "datasheetarchive"
             )
+        
+        if skip_ai: # User sent a request to skip the AI parsing of datasheet
+            print(f"Skipping AI parsing for {part_number} as requested by user.")
+            return ScrapedComponent(
+                part_number = part_number,
+                description = description,
+                specifications = {},
+                datasheet_url = pdf_response.url,
+                source = "datasheetarchive"
+            )
+
         
         print("Extracting data from datasheet with AI")
 
