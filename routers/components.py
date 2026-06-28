@@ -13,9 +13,27 @@ from scraper import fetch_datasheet_url, parse_pdf
 from ratelimit import limiter
 import requests
 
+
 from auth import get_api_key
 
 router = APIRouter(prefix="/components", tags=["Components"])
+
+from main import request_ctx
+
+def component_fetch_ratelimit():
+    request = request_ctx.get()
+
+    skip_ai = request.query_params.get("skip_ai", "").lower()
+    force_fetch = request.query_params.get("force_fetch", "").lower()
+
+    if skip_ai in ["true", "1", "yes", True]:
+        return "50/minute"  # Limit to 50 requests per minute if skip_ai is true
+
+    if force_fetch in ["true", "1", "yes", True]:
+        return "2/minute"  # Limit to 2 requests per minute if force_fetch is true
+    
+    return "20/minute"  # Default limit to 20 requests per minute
+
 
 def save_version_backup(db: Session, component: ComponentModel):
     """Save a backup of the current version of a component to the history table. (Doesn't commit to session)"""
@@ -216,10 +234,8 @@ def update_specs(request: Request, part_number: str, db: Session = Depends(get_d
 
     return component
 
-
-
 @router.get("/{part_number}", response_model=ComponentResponse)
-@limiter.limit("20/minute") # limit to 20 requests per minute
+@limiter.limit(component_fetch_ratelimit) # dynamic rate limit
 
 # if 2 people request the same part at the same time, it will scrape datasheetarchive twice. 
 # implement a solution and have it immediately return the result to the second person after the first persons request is done

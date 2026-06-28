@@ -19,6 +19,7 @@ from routers import components
 from database import engine
 from cache import redis_client
 from ratelimit import limiter
+from contextvars import ContextVar
 
 load_dotenv()
 
@@ -52,6 +53,16 @@ def handle_rate_limit_exceeded(request: Request, exc: RateLimitExceeded):
             }
     )
 
+# Context variable for request object
+request_ctx: ContextVar[Request] = ContextVar("request_ctx")
+
+@app.middleware("http")
+async def add_request_to_context(request: Request, call_next):
+    token = request_ctx.set(request)
+    try:
+        return await call_next(request)
+    finally:
+        request_ctx.reset(token)
 
 # Health check functions
 def check_db_connection():
