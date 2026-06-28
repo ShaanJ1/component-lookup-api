@@ -23,7 +23,7 @@ class ComponentBase(BaseModel):
     )
 
     part_number:    str = Field(..., min_length=1, max_length=100, description="The unique part number of the component", examples=["NE555", "ATmega328P", "1N4148"])
-    description:    str | None = Field(..., max_length=1000, description="Component description")
+    description:    str | None = Field(..., description="Component description")
     specifications: dict[str, Any] = Field(..., default_factory=dict, description="Component specifications")
     datasheet_url:  HttpUrl = Field(..., description="URL of the component's datasheet")
     source:         str = Field(..., max_length=100, description="Source of the component information")
