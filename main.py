@@ -128,7 +128,6 @@ def health(request: Request):
     }
 
 @app.get("/")
-@limiter.limit("1/second") # limit to 1 request per second
 async def root():
     """Root page"""
     return {"message": "Welcome to Component Lookup API!. Navigate through /docs or /redocs for documentation"}
