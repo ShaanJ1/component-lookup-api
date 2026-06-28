@@ -22,27 +22,20 @@ from main import request_ctx
 
 def component_fetch_ratelimit():
     request = request_ctx.get()
+    part_number = request.path_params.get("part_number", "").lower()    
 
-    skip_ai = request.query_params.get("skip_ai", "").lower()
-    force_fetch = request.query_params.get("force_fetch", "").lower()
-    part_number = request.query_params.get("part_number", "").lower()    
-    
     component_already_exists = get_from_cache(f"component:{part_number.upper()}")
 
-    using_ai = skip_ai in ["true", "1", "yes", True]
-    using_force = force_fetch in ["true", "1", "yes", True]
+    using_ai = str(request.query_params.get("skip_ai", "")).lower() not in ["true", "1", "yes"]
+    using_force = str(request.query_params.get("force_fetch", "")).lower() in ["true", "1", "yes"]
 
-    if component_already_exists and not using_force: # instant return from cache
+    if component_already_exists and not using_force: # no scraper or ai
         return "5/second"
 
-    if component_already_exists and using_force and using_ai: # grab a new component with ai
-        return "2/minute"
+    if using_ai: # using scraper and ai
+        return "5/minute"
 
-    if not using_ai: # grab a new component but no ai
-        return "50/minute"
-
-    # grab a brand new component with ai
-    return "2/minute"
+    return "50/minute" # using scraper, no ai
 
 
 def save_version_backup(db: Session, component: ComponentModel):
