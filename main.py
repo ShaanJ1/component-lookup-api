@@ -128,9 +128,10 @@ def health(request: Request):
     }
 
 @app.get("/")
+@limiter.limit("1/second") # limit to 1 request per second
 async def root():
     """Root page"""
-    return {"message": "Welcome to Component Lookup API!. Navigate through /docs for documentation"}
+    return {"message": "Welcome to Component Lookup API!. Navigate through /docs or /redocs for documentation"}
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True) # 127.0.0.1 for local testing, 0.0.0.0 for production

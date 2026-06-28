@@ -25,14 +25,24 @@ def component_fetch_ratelimit():
 
     skip_ai = request.query_params.get("skip_ai", "").lower()
     force_fetch = request.query_params.get("force_fetch", "").lower()
-
-    if skip_ai in ["true", "1", "yes", True]:
-        return "50/minute"  # Limit to 50 requests per minute if skip_ai is true
-
-    if force_fetch in ["true", "1", "yes", True]:
-        return "2/minute"  # Limit to 2 requests per minute if force_fetch is true
+    part_number = request.query_params.get("part_number", "").lower()    
     
-    return "20/minute"  # Default limit to 20 requests per minute
+    component_already_exists = get_from_cache(f"component:{part_number.upper()}")
+
+    using_ai = skip_ai in ["true", "1", "yes", True]
+    using_force = force_fetch in ["true", "1", "yes", True]
+
+    if component_already_exists and not using_force: # instant return from cache
+        return "5/second"
+
+    if component_already_exists and using_force and using_ai: # grab a new component with ai
+        return "2/minute"
+
+    if not using_ai: # grab a new component but no ai
+        return "50/minute"
+
+    # grab a brand new component with ai
+    return "2/minute"
 
 
 def save_version_backup(db: Session, component: ComponentModel):
@@ -113,7 +123,7 @@ def delete_component(request: Request, part_number: str, api_key: str = Depends(
 
 
 @router.post("/fillmissingspecs", status_code=status.HTTP_200_OK)
-@limiter.limit("20/minute") # limit to 20 requests per minute
+@limiter.limit("1/minute") # limit to 1 request per minute, very ai intensive
 def fill_missing_specs(request: Request, api_key: str = Depends(get_api_key), db: Session = Depends(get_db)):
     """Scans database for all components with empty specifications and re runs the AI parser. (AUTH REQUIRED)"""
     spec_query = select(ComponentModel).where(
@@ -198,7 +208,7 @@ def view_saves(request: Request, api_key: str = Depends(get_api_key), db: Sessio
     return sorted_history
 
 @router.post("/updatespecs/{part_number}", status_code=status.HTTP_200_OK)
-@limiter.limit("20/minute") # limit to 20 requests per minute
+@limiter.limit("5/minute") # limit to 5 requests per minute
 def update_specs(request: Request, part_number: str, db: Session = Depends(get_db)):
     """Re runs the AI parser for a specific component and force updates its specifications."""
     upn = part_number.upper() # uppercase part number
@@ -208,10 +218,11 @@ def update_specs(request: Request, part_number: str, db: Session = Depends(get_d
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Component {upn} not found in database")
 
     print(f"Updating specifications for {component.part_number}...")
-    pdf_bytes = requests.get(component.datasheet_url, allow_redirects=True, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}, timeout=10)
+    response = requests.get(component.datasheet_url, allow_redirects=True, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}, timeout=10)
+    pdf_bytes = response.content
 
     # if no pdf found
-    if not pdf_bytes.content or pdf_bytes.headers.get('Content-Type') != 'application/pdf':
+    if not pdf_bytes or response.headers.get('Content-Type') != 'application/pdf':
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Could not fetch PDF for {component.part_number}. Datasheet URL: {component.datasheet_url}")
 
     parsed_specs = parse_pdf(pdf_bytes, component.part_number.upper())
