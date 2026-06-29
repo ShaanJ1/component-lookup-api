@@ -105,6 +105,7 @@ def check_redis_connection():
         return False
     
 def check_datasheet_scraper():
+    """Checks if the datasheet scraper works by sending a known component to the scraper and seeing if it returns a 500 error or not"""
     logger.trace("Running datasheet scraper health check. Default settings: NE555, Texas Instruments, Skipping AI")
     scraped = fetch_datasheet_url(part_number="NE555", manufacturer="texas-instruments", skip_ai=True)
 
@@ -120,7 +121,7 @@ def check_datasheet_scraper():
 @app.get("/health")
 @limiter.limit("1/second") # limit to 1 request per second
 def health(request: Request):
-    """Get the current API status and api metrics"""
+    """Get the current API status and API metrics"""
     logger.info(f"Health check endpoint requested by IP: '{request.client.host}'")
     start_time = time.time_ns()
     start_time_seconds = start_time / 1_000_000_000 # convert to seconds
@@ -169,7 +170,7 @@ def health(request: Request):
 
 @app.get("/")
 async def root(request: Request):
-    """Root page"""
+    """Root page of the API"""
     logger.info(f"Root endpoint requested by IP: '{request.client.host}'")
     return {"message": "Welcome to Component Lookup API!. Navigate through /docs or /redocs for documentation"}
 

@@ -1,5 +1,5 @@
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Query, status, Body
 
 from sqlalchemy import select, cast, String, func
 from sqlalchemy.orm import Session
@@ -24,6 +24,7 @@ router = APIRouter(prefix="/components", tags=["Components"])
 logger.success("Components router initialized")
 
 def component_fetch_ratelimit():
+    """Dynamic rate limit for fetching components based on how heavy the request is"""
     request = request_ctx.get()
     part_number = request.path_params.get("part_number", "").lower()    
 
@@ -74,8 +75,36 @@ def save_version_backup(db: Session, component: ComponentModel):
 
 @router.put("/{part_number}", response_model=ComponentResponse)
 @limiter.limit("20/minute") # limit to 20 requests per minute
-def update_component(request: Request, part_number: str, component_data: ComponentUpdate | None = None, api_key: str = Depends(get_api_key), db: Session = Depends(get_db)):
-    """Manually add a component to the database. Expects part number and a table of specifications. (AUTH REQUIRED)"""
+def update_component(request: Request, part_number: str, api_key: str = Depends(get_api_key), db: Session = Depends(get_db), component_data: ComponentUpdate = Body(
+    ...,
+    openapi_examples={
+        "description_only": {
+            "summary": "Update only the description",
+            "description": "This example shows how to update only the description of a component.",
+            "value": {"description": "Updated description of the component"}
+        },
+        "specs_only": {
+            "summary": "Update only the specifications",
+            "description": "This example shows how to update only the specifications of a component.",
+            "value": {"specifications": {"total supply current": "8mA", "operating temperature": "-55°C to +125°C", "package": "DIP-8"}}
+        },
+        "all_fields": {
+            "summary": "Update all fields",
+            "description": "This example shows how to update all fields of a component.",
+            "value": {
+                "description": "A Precision Timer IC",
+                "specifications": {
+                  "total supply current": "8mA",
+                  "operating temperature": "-55°C to +125°C",
+                  "package": "DIP-8"
+                },
+                "datasheet_url": "https://datasheet.datasheetarchive.com/originals/distributors/Datasheets-5/DSA-98723.pdf",
+                "source": "datasheetarchive"
+            }
+        }
+    }
+)):
+    """Manually update a component in the database. Expects a part number and a request body with the fields to update. (AUTH REQUIRED)"""
     logger.info(f"PUT /components/{{part_number}} endpoint requested by IP: '{request.client.host}'")
 
     upn = part_number.upper() # uppercase part number
@@ -144,7 +173,7 @@ def delete_component(request: Request, part_number: str, api_key: str = Depends(
 @router.post("/fillmissingspecs", status_code=status.HTTP_200_OK)
 @limiter.limit("1/minute") # limit to 1 request per minute, very ai intensive
 def fill_missing_specs(request: Request, api_key: str = Depends(get_api_key), db: Session = Depends(get_db)):
-    """Scans database for all components with empty specifications and re runs the AI parser. (AUTH REQUIRED)"""
+    """Scans database for all components with empty specifications and generates them using the AI parser. (AUTH REQUIRED)"""
     logger.info(f"POST /components/fillmissingspecs endpoint requested by IP: '{request.client.host}'")
 
     spec_query = select(ComponentModel).where(
@@ -219,7 +248,7 @@ def fill_missing_specs(request: Request, api_key: str = Depends(get_api_key), db
 @router.get("/viewsaves/{part_number}", response_model=list[ComponentHistoryResponse]) 
 @limiter.limit("20/minute") # limit to 20 requests per minute
 def view_saves(request: Request, part_number: str, api_key: str = Depends(get_api_key), db: Session = Depends(get_db)):
-    """View the past versions of a specific component. (AUTH REQUIRED)"""
+    """View the version history of a specific component. (AUTH REQUIRED)"""
     logger.info(f"GET /components/viewsaves/{part_number} endpoint requested by IP: '{request.client.host}'")
 
     upn = part_number.upper() # uppercase part number
@@ -237,7 +266,7 @@ def view_saves(request: Request, part_number: str, api_key: str = Depends(get_ap
 @router.get("/viewsaves/", response_model=dict[str, list[ComponentHistoryResponse]]) 
 @limiter.limit("20/minute") # limit to 20 requests per minute
 def view_saves(request: Request, api_key: str = Depends(get_api_key), db: Session = Depends(get_db)):
-    """View the past versions of every component that was once in the database. (AUTH REQUIRED)"""
+    """View the version history of every component that was once in the database. (AUTH REQUIRED)"""
     logger.info(f"GET /components/viewsaves/ endpoint requested by IP: '{request.client.host}'")
 
     query = select(ComponentHistoryModel).order_by(ComponentHistoryModel.saved_at.desc())
@@ -262,7 +291,7 @@ def view_saves(request: Request, api_key: str = Depends(get_api_key), db: Sessio
 @router.post("/updatespecs/{part_number}", status_code=status.HTTP_200_OK)
 @limiter.limit("5/minute") # limit to 5 requests per minute
 def update_specs(request: Request, part_number: str, db: Session = Depends(get_db)):
-    """Re runs the AI parser for a specific component and force updates its specifications."""
+    """Regenerates the specifications table for a specific component by re-running the AI parser on the datasheet. (AUTH REQUIRED)"""
     logger.info(f"POST /components/updatespecs/{part_number} endpoint requested by IP: '{request.client.host}'")
 
     upn = part_number.upper() # uppercase part number
@@ -318,12 +347,12 @@ def update_specs(request: Request, part_number: str, db: Session = Depends(get_d
 def fetch_component(
         request: Request, 
         part_number: str, 
-        manufacturer: str | None = Query(None, description="Optionally specify the manufacturer of the component"), 
+        manufacturer: str | None = Query(None, description="Optionally specify the manufacturer of the component", examples=["Texas-Instruments", "STMicroelectronics", "Central-Semiconductor"]), 
         skip_ai: bool = Query(False, description="Skip AI parsing of datasheet PDF. (Faster response but won't get detailed specifications, only applies to new components not in our database)"), 
         force_fetch: bool = Query(False, description="Force fetch the component from external sources. Useful if you want to fully refresh the component data"), 
         db: Session = Depends(get_db)
     ):
-    """Fetch the specifications for a specific component!"""    
+    """Fetch the data for a specific component!"""    
     logger.info(f"GET /components/{part_number} endpoint requested by IP: '{request.client.host}'")
 
     upn = part_number.upper() # uppercase part number
@@ -510,7 +539,7 @@ def fetch_component(
 
 @router.get("", response_model=list[ComponentResponse])
 @limiter.limit("30/minute") # limit to 30 requests per minute
-def get_components(request: Request, page: int = Query(1, ge=1), page_size: int = Query(25, ge=1, le=50), db: Session = Depends(get_db)): # minimum page size 1, default 25, max 50
+def get_components(request: Request, page: int = Query(1, ge=1, description="Page number"), page_size: int = Query(25, ge=1, le=50, description="Number of components per page"), db: Session = Depends(get_db)): # minimum page size 1, default 25, max 50
     """Fetch all components in our database! Use the parameters 'page' and 'page_size' to paginate the results. (Default page size is 25, max 50)"""
     logger.info(f"GET /components/ endpoint requested by IP: '{request.client.host}'")
 

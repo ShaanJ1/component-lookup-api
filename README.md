@@ -121,6 +121,8 @@ https://component-lookup-api.hackclub.app/
 ### Optional Query Parameters
 | Method  | Endpoint                      | Parameter      | Description  |
 | :-----: | :---------------------------- | -------------- | :----------- |
+|   GET   | `/components/`                | `page`         | Specify what page to view |
+|   GET   | `/components/`                | `page_size`    | Specify how many components to display per page |
 |   GET   | `/components/{part_number}`   | `manufacturer` | Filter component info by manufacturer |
 |   GET   | `/components/{part_number}`   | `skip_ai`      | Skip AI parsing and return basic information about the component (no specifications table)|
 |   GET   | `/components/{part_number}`   | `force_fetch`  | Ignore database and fetch the component from scratch again |
