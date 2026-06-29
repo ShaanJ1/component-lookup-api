@@ -10,6 +10,8 @@ import requests
 from bs4 import BeautifulSoup
 from pydantic import BaseModel
 
+from datetime import datetime, timedelta, timezone
+
 from typing import Any
 import json
 
@@ -18,13 +20,27 @@ from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 
+from cache import redis_client
+
+from loguru import logger
+
 load_dotenv()
 
+google_api_key = os.getenv("GOOGLE_API_KEY")
+
+if not google_api_key:
+    logger.critical("GOOGLE_API_KEY environment variable is not set.")
+
 client = genai.Client(
-    api_key = os.getenv("GOOGLE_API_KEY")
+    api_key = google_api_key
 )
 
 models = ['gemini-3.5-flash', 'gemini-3-flash-preview', 'gemini-2.5-flash'] # try these models in order if one fails
+
+model_limits = {
+    "per_minute": 5,
+    "per_day": 20
+}
 
 class ScrapedComponent(BaseModel):
     part_number: str
@@ -33,9 +49,46 @@ class ScrapedComponent(BaseModel):
     datasheet_url: str
     source: str
 
+def check_rate_limit(model: str):
+    minute_key = f"minute_ai_ratelimit:{model}"
+    daily_key = f"daily_ai_ratelimit:{model}"
+
+    now = datetime.now(timezone.utc)
+    tmr = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+
+    minute_count = redis_client.incr(minute_key)
+    daily_count = redis_client.incr(daily_key)
+
+    if minute_count == 1:
+        redis_client.expire(minute_key, 60)  # Set expiration for 1 minute
+
+    if daily_count == 1:
+        redis_client.expire(daily_key, int((tmr - now).total_seconds())) # expire at midnight UTC
+
+    #checking minute limit
+    if minute_count > model_limits["per_minute"]:
+        logger.warning(f"AI Minute Rate Limit exceeded for model {model}.")
+        redis_client.decr(minute_key)
+        redis_client.decr(daily_key)
+
+        return "MINUTE_LIMIT"
+    
+    #checking daily limit
+    if daily_count > model_limits["per_day"]:
+        logger.warning(f"AI Daily Rate Limit exceeded for model {model}.")
+        redis_client.decr(minute_key)
+        redis_client.decr(daily_key)
+
+        return "DAILY_LIMIT"
+    
+    logger.debug(f"AI Rate Limit check passed for model {model}. Minute Count: {minute_count}, Daily Count: {daily_count}")
+    return None
+
 # extract component specifications from a pdf datasheet
-def parse_pdf(pdf_bytes: bytes, part_number: str) -> dict | None:  # fetch time ~20-60 seconds (depending on model)
+@logger.catch(reraise=False)
+def parse_pdf(pdf_bytes: bytes, part_number: str) -> dict | None:  # fetch time ~20-120 seconds (depending on model and app latency)
     """Parses a PDF datasheet using AI and extracts all relevant data for a specific component. Returns None if all attempts failed."""
+    logger.info(f"Initalizing PDF AI parsing for: {part_number}")
     prompt = f"""
     You are extracting specifications from a pdf of an electronic component's datasheet.
     
@@ -216,6 +269,15 @@ def parse_pdf(pdf_bytes: bytes, part_number: str) -> dict | None:  # fetch time 
 
     for model_attempt in models:
         try:
+            ratelimited = check_rate_limit(model_attempt)
+            if ratelimited in ("MINUTE_LIMIT", "DAILY_LIMIT"):
+                return {
+                    "RATELIMIT_EXCEEDED": True,
+                    "TYPE": ratelimited,
+                    "MODEL": model_attempt
+                }
+
+            logger.debug(f"Attempting to parse PDF for {part_number} with AI model: {model_attempt}")
             response = client.models.generate_content(
                 model = model_attempt,
                 contents = [
@@ -227,23 +289,35 @@ def parse_pdf(pdf_bytes: bytes, part_number: str) -> dict | None:  # fetch time 
                     response_mime_type = "application/json" # forces model to output valid json data instead of regular text
                 )
             )
-            return json.loads(response.text)
+
+            try:
+                data = json.loads(response.text)
+                logger.success(f"Successfully parsed PDF for {part_number} with AI model: {model_attempt}. Data: {data}")
+                return data
+            except json.JSONDecodeError as e:
+                logger.exception(f"AI Model {model_attempt} returned invalid JSON: {e}")
+                return None
         
-        except Exception as e:
+        except Exception as e: # todo: sometimes this throws an error without trying all models
             response_code = getattr(e, "code", None)
-            print(f"Error parsing PDF for {part_number} with AI model {model_attempt} (scraper.py | line 234) (code: {response_code}): {e}")
-            if response_code not in (503, 429): # If the errors are not because of high demand or exceeded quota
-                print(f"AI Model recieved an unexpected error. Error: {e}")
-                return None # Server sided error that isnt what we expected, dont try other models
-            
+            logger.error(f"Error parsing PDF for {part_number} with AI model {model_attempt} (code: {response_code}): {e}")
             if response_code == 400:
-                print(f"AI returned an INVAID_ARGUMENT error. Error: {e}")
+                logger.error(f"AI returned an INVALID_ARGUMENT error. Error: {e}")
                 return None
             
-            time.sleep(1) # wait 1 second before trying the next model
+
+            if response_code not in (503, 429): # If the errors are not because of high demand or exceeded quota
+                logger.error(f"AI Model recieved an unexpected non retryable error: {e}")
+                return None # Server sided error that isnt what we expected, quit operation
+            
+            logger.warning(f"AI Model {model_attempt} failed, retrying with fallback model in 1 second")
+            time.sleep(1) 
+
+    logger.error(f"All AI model attempts failed for {part_number}. Unable to parse PDF.")
     return None
 
-def fetch_datasheet_url(part_number: str, manufacturer: str | None = None, skip_ai: bool = False) -> ScrapedComponent | None:
+@logger.catch(reraise=False)
+def fetch_datasheet_url(part_number: str, manufacturer: str | None = None, skip_ai: bool | str = False) -> ScrapedComponent | dict[str, Any] | None | int:
     """Fetch the datasheet URL and all other relevant info for a specific component by scraping external resources."""
     part_number = part_number.upper()
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
@@ -252,6 +326,7 @@ def fetch_datasheet_url(part_number: str, manufacturer: str | None = None, skip_
     try: 
         mfg = f"/{manufacturer.lower()}" if manufacturer else ""
         url = f"https://www.datasheetarchive.com/datasheet/{part_number}{mfg}"
+        logger.debug(f"Fetching from DatasheetArchive for {part_number} with URL: {url}")
 
         response = requests.get(url, headers=headers, timeout=10)
         response.raise_for_status()  # Check if the request was successful
@@ -260,7 +335,7 @@ def fetch_datasheet_url(part_number: str, manufacturer: str | None = None, skip_
  
         download_btn = soup.find('a', class_='download-datasheet')
         if not download_btn:
-            print(f"Could not find download button for {part_number} on DatasheetArchive.")
+            logger.warning(f"Could not find download button for {part_number} on DatasheetArchive.")
             return None # couldnt find a download button for some reason
         
         pdf_page = download_btn['href']
@@ -273,6 +348,7 @@ def fetch_datasheet_url(part_number: str, manufacturer: str | None = None, skip_
             description = desc.getText()
 
         if pdf_response.headers.get('Content-Type') != 'application/pdf': # datasheet is not a pdf file
+            logger.warning(f"Datasheet for {part_number} is not a PDF. Content-Type: {pdf_response.headers.get('Content-Type')}")
             return ScrapedComponent( 
                 part_number = part_number,
                 description = description,
@@ -282,7 +358,7 @@ def fetch_datasheet_url(part_number: str, manufacturer: str | None = None, skip_
             )
         
         if skip_ai: # User sent a request to skip the AI parsing of datasheet
-            print(f"Skipping AI parsing for {part_number} as requested by user.")
+            logger.info(f"Skipping AI parsing for {part_number} as requested.")
             return ScrapedComponent(
                 part_number = part_number,
                 description = description,
@@ -292,12 +368,11 @@ def fetch_datasheet_url(part_number: str, manufacturer: str | None = None, skip_
             )
 
         
-        print("Extracting data from datasheet with AI")
-
+        logger.info("Sending datasheet to AI Parser...")
         ai_result = parse_pdf(pdf_response.content, part_number)
 
         if not ai_result:
-            print(f"AI parsing failed for {part_number}, returning empty specifications.")
+            logger.warning(f"AI parsing failed for {part_number}, returning empty specifications.")
             return ScrapedComponent(
                 part_number = part_number,
                 description = description,
@@ -305,6 +380,20 @@ def fetch_datasheet_url(part_number: str, manufacturer: str | None = None, skip_
                 datasheet_url = pdf_response.url,
                 source = "datasheetarchive"
             )
+
+        if "RATELIMIT_EXCEEDED" in ai_result:
+            return {
+                "RATELIMIT_EXCEEDED": True,
+                "component": ScrapedComponent(
+                    part_number = part_number,
+                    description = description,
+                    specifications = {},
+                    datasheet_url = pdf_response.url,
+                    source = "datasheetarchive"
+                ),
+                "TYPE": ai_result.get("TYPE"),
+                "MODEL": ai_result.get("MODEL")
+            }
 
         return ScrapedComponent(
             part_number = part_number,
@@ -314,8 +403,13 @@ def fetch_datasheet_url(part_number: str, manufacturer: str | None = None, skip_
             source = "datasheetarchive"
         )
 
-    except Exception as e:
-        print(f"Scrape #1 (DatasheetArchive) failed for {part_number} (scraper.py | line 320): {e}")
+    except requests.exceptions.HTTPError as http_err:
+        if http_err.response.status_code == 500:
+            logger.error(f"DatasheetArchive returned a 500 error for {part_number}")
+            return 500 
+        logger.exception(f"HTTP error occurred while fetching datasheet for {part_number}: {http_err}")
 
+    except Exception as e:
+        logger.exception(f"Scrape #1 (DatasheetArchive) failed entirely for {part_number}: {e}")
 
     return None 

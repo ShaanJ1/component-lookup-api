@@ -1,6 +1,8 @@
 import redis
 from schemas import ComponentResponse
 
+from loguru import logger
+
 redis_host ="localhost"
 redis_port = 6379
 
@@ -17,11 +19,14 @@ def get_from_cache(key: str):
     """Get a value from the cache by key, returns None if not found"""
     data = redis_client.get(key)
     if data:
-        print(f"Cache found for {key}")
+        logger.debug(f"Cache found for {key} with value: '{data}'")
         return ComponentResponse.model_validate_json(data)
     
+    logger.trace(f"Cache miss for {key}")
     return None
 
 def set_cache(key: str, value: ComponentResponse):
     """Set a component in the cache with a key"""
+    logger.debug(f"Setting cache for {key}")
     redis_client.set(key, value.model_dump_json(), ex = CACHE_TTL)
+    logger.success(f"Cache set for key: '{key}' with value: '{value.model_dump_json()}'")

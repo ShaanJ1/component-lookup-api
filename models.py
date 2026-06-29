@@ -8,6 +8,8 @@ from database import Base
 from typing import Any
 from pydantic import HttpUrl
 
+from loguru import logger
+
 from database import engine
 
 # Custom SQLAlchemy TypeDecorator for Pydantics HttpUrl type
@@ -48,4 +50,6 @@ class ComponentHistoryModel(Base):
 
     saved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
+
 Base.metadata.create_all(engine)
+logger.success("Database tables verified/created")

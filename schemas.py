@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field, field_validator, HttpUrl, ConfigDict
 from typing import Any
 from datetime import datetime
 import re
+from loguru import logger
 
 def sanitize_text(text: str | None) -> str | None:
     """
@@ -31,6 +32,7 @@ class ComponentBase(BaseModel):
     @field_validator("part_number", mode="before")
     @classmethod
     def validate_part_number(cls, value):
+        logger.trace(f"Validating part number: {value}")
         if not isinstance(value, str):
             raise ValueError("Part number must be a non-empty string.")
         

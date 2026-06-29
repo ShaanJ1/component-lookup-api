@@ -2,8 +2,6 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 import uvicorn
 
-from cache import redis_host, redis_port
-
 from sqlalchemy import text
 
 import os
@@ -19,7 +17,10 @@ from routers import components
 from database import engine
 from cache import redis_client
 from ratelimit import limiter
-from contextvars import ContextVar
+from scraper import fetch_datasheet_url
+from context import request_ctx
+
+from loguru import logger
 
 load_dotenv()
 
@@ -40,10 +41,10 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.include_router(components.router)
 
 ## Custom API Ratelimit Message
-
 @app.exception_handler(RateLimitExceeded)
 def handle_rate_limit_exceeded(request: Request, exc: RateLimitExceeded):
     """Custom handler for rate limit exceeded errors"""
+    logger.log("RATELIMIT", f"Rate limit exceeded for IP: '{request.client.host}' on path: '{request.url.path}'")
     return JSONResponse(
         status_code=exc.status_code, # 429
         content={
@@ -53,14 +54,13 @@ def handle_rate_limit_exceeded(request: Request, exc: RateLimitExceeded):
             }
     )
 
-# Context variable for request object
-request_ctx: ContextVar[Request] = ContextVar("request_ctx")
-
 @app.middleware("http")
 async def add_request_to_context(request: Request, call_next):
     token = request_ctx.set(request)
     try:
         return await call_next(request)
+    # except Exception as e:
+    #     logger.exception(f"An unhandled exception occurred when processing request {request.url}: {e}")
     finally:
         request_ctx.reset(token)
 
@@ -70,20 +70,34 @@ def check_db_connection():
     with engine.connect() as connection:
         try:
             connection.execute(text("SELECT 1")) # simple query that checks if the database is reachable
+            logger.debug('Database connection passed health check')
             return True
 
         except Exception as e:
-            print(f"Database connection failed. (main.py | line 65): {e}")
+            logger.error(f'Database connection failed health check: {e}')
             return False
 
 def check_redis_connection():
     """Checks if the redis connection is good by pinging the redis server"""
     try:
-        return redis_client.ping()
+        result = redis_client.ping()
+        logger.debug(f'Redis connection passed health check')
+        return result
     
     except Exception as e:
-        print(f"Redis connection failed. (main.py | line 74): {e}")
+        logger.error(f"Redis health check failed: {e}")
         return False
+    
+def check_datasheet_scraper():
+    logger.trace("Running datasheet scraper health check. Default settings: NE555, Texas Instruments, Skipping AI")
+    scraped = fetch_datasheet_url(part_number="NE555", manufacturer="texas-instruments", skip_ai=True)
+
+    if not scraped == 500:
+        logger.debug("Datasheet scraper passed health check")
+        return True
+    
+    logger.error("Datasheet scraper health check failed (DatasheetArchive response: 500)")
+    return False
 
 ## API Endpoints ##
 
@@ -91,6 +105,7 @@ def check_redis_connection():
 @limiter.limit("1/second") # limit to 1 request per second
 def health(request: Request):
     """Get the current API status and api metrics"""
+    logger.info(f"Health check endpoint requested by IP: '{request.client.host}'")
     start_time = time.time_ns()
     start_time_seconds = start_time / 1_000_000_000 # convert to seconds
 
@@ -98,20 +113,25 @@ def health(request: Request):
 
     db_connection = check_db_connection()
     redis_connection = check_redis_connection()
+    dsa_connection = check_datasheet_scraper() # datasheetarchive connection
 
-    db_status = "down"
-    cache_status = "down"
+    db_status = "❌ down"
+    cache_status = "❌ down"
+    scraper_status = "❌ down"
 
     if db_connection:
-        db_status = "good"
+        db_status = "✅ good"
 
     if redis_connection:
-        cache_status = "good"
+        cache_status = "✅ good"
+
+    if dsa_connection:
+        scraper_status = "✅ good"
 
     ping = (time.time_ns() - start_time) / 1_000_000 # calculate ping in milliseconds
     process = psutil.Process(os.getpid()) # get the current process to check system metrics
 
-    return {
+    metrics = {
         "status": "online",
         "uptime": f"{round(uptime, 2)} seconds",
         "ping": f"{round(ping, 2)} milliseconds",
@@ -123,14 +143,31 @@ def health(request: Request):
         },
         "dependencies": {
             "database": db_status,
-            "cache": cache_status
+            "cache": cache_status,
+            "scraper": scraper_status
         }
     }
+    logger.info(f"Health metrics have been generated: {metrics}")
+
+    return metrics
 
 @app.get("/")
-async def root():
+async def root(request: Request):
     """Root page"""
+    logger.info(f"Root endpoint requested by IP: '{request.client.host}'")
     return {"message": "Welcome to Component Lookup API!. Navigate through /docs or /redocs for documentation"}
 
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True) # 127.0.0.1 for local testing, 0.0.0.0 for production
+    logger.add("logs/file_{time}.log")
+    logger.info("Starting Component Lookup API...")
+
+    # fix: custom log level not working & logs not writing to file
+    logger.level("RATELIMIT", no=29, color="<yellow>", icon="⌛")
+
+    if os.getenv("ENVIRONMENT") == "LOCAL":
+        logger.info("Running on local environment")
+        uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True) # 127.0.0.1 for local testing
+
+    else:
+        logger.debug("Running on production environment")
+        uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True) # 0.0.0.0 for production
