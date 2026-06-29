@@ -77,8 +77,8 @@ After every initial fetch of a new component, the API stores the components info
 
 # API Documentation
 The API docs are available through:
-- Swagger UI -> `/docs`
-- ReDoc -> `/redocs`
+- Swagger UI -> [`/docs`](https://component-lookup-api.hackclub.app/docs)
+- ReDoc -> [`/redocs`](https://component-lookup-api.hackclub.app/redoc)
 
 # Authentication
 Some endpoints require an API key, which is configured in your `.env` file.  
