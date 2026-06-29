@@ -1,3 +1,20 @@
+import sys
+from loguru import logger
+
+## Logger setup before importing anything else
+logger.remove()
+
+logger.add("logs/api.log", level="TRACE", rotation="00:00", retention="7d", enqueue=True)
+logger.add(sys.stdout, level="DEBUG", format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>")
+
+logger.info("Starting Component Lookup API...")
+
+try:
+    logger.level("RATELIMIT", no=29, color="<yellow>")
+except ValueError:
+    pass
+##
+
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 import uvicorn
@@ -20,7 +37,6 @@ from ratelimit import limiter
 from scraper import fetch_datasheet_url
 from context import request_ctx
 
-from loguru import logger
 
 load_dotenv()
 
@@ -157,13 +173,9 @@ async def root(request: Request):
     logger.info(f"Root endpoint requested by IP: '{request.client.host}'")
     return {"message": "Welcome to Component Lookup API!. Navigate through /docs or /redocs for documentation"}
 
+##
+
 if __name__ == "__main__":
-    logger.add("logs/file_{time}.log")
-    logger.info("Starting Component Lookup API...")
-
-    # fix: custom log level not working & logs not writing to file
-    logger.level("RATELIMIT", no=29, color="<yellow>", icon="⌛")
-
     if os.getenv("ENVIRONMENT") == "LOCAL":
         logger.info("Running on local environment")
         uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True) # 127.0.0.1 for local testing

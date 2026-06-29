@@ -49,6 +49,7 @@ class ScrapedComponent(BaseModel):
     datasheet_url: str
     source: str
 
+@logger.catch(reraise=False)
 def check_rate_limit(model: str):
     minute_key = f"minute_ai_ratelimit:{model}"
     daily_key = f"daily_ai_ratelimit:{model}"
