@@ -472,6 +472,12 @@ def fetch_component(
         logger.error(f"Race condition timed out while waiting for other request to finish fetching {upn}.")
         raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail="Request timed out while waiting for component data, Please try again")
 
+    # check database after getting the lock just in case
+    if db.get(ComponentModel, upn) and not force_fetch:
+        logger.debug(f"Found {part_number} in database after acquiring lock, caching and returning result")
+        result = ComponentResponse.model_validate(db.get(ComponentModel, upn), from_attributes=True)
+        set_cache(key, result)
+        return result
 
     logger.info(f"Fetching component {upn} from external resources...")
     try:
@@ -493,9 +499,19 @@ def fetch_component(
                 save_version_backup(db, newComponent)
                 db.commit()
                 db.refresh(newComponent)
-            except IntegrityError as e:
-                logger.exception(f"Database Integrity error while adding {part_number} to database: {e}")
+            except IntegrityError as e: # fallback if a process slips through the redis lock
+                logger.warning(f"Database Integrity error while adding {part_number} to database (possible duplicate from another process, attempting rollback and return existing): {e}")
                 db.rollback()
+
+                existing = db.get(ComponentModel, upn)
+                if existing:
+                    logger.debug(f"Found existing component {upn} in database after IntegrityError, returning existing component")
+                    result = ComponentResponse.model_validate(existing, from_attributes=True)
+                    set_cache(key, result)
+                    return result
+                logger.exception(f"Could not find existing component {upn} in database after IntegrityError, returning 500 error")
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Database error adding {part_number} to database after exceeded AI limit")
+
             except Exception as e:
                 logger.exception(f"Could not add {part_number} to database after exceeded AI limit: {e}")
 
@@ -520,10 +536,18 @@ def fetch_component(
             db.commit()
             db.refresh(newComponent)
             logger.success(f"Component {upn} fetched and added to database")
-        except IntegrityError as e:
-            logger.exception(f"Database Integrity error while adding {part_number} to database: {e}")
+        except IntegrityError as e: # fallback if a process slips through the redis lock
+            logger.warning(f"Database Integrity error while adding {part_number} to database (possible duplicate from another process, attempting rollback and return existing): {e}")
             db.rollback()
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"There was an integrity error while adding {part_number} to the database")
+
+            existing = db.get(ComponentModel, upn)
+            if existing:
+                logger.debug(f"Found existing component {upn} in database after IntegrityError, returning existing component")
+                result = ComponentResponse.model_validate(existing, from_attributes=True)
+                set_cache(key, result)
+                return result
+            logger.exception(f"Could not find existing component {upn} in database after IntegrityError, returning 500 error")
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Database error adding {part_number} to database")
 
         except Exception as e:
             logger.exception(f"Could not add {part_number} to database: {e}")
