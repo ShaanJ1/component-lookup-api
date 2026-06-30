@@ -263,7 +263,7 @@ def view_saves(request: Request, part_number: str, api_key: str = Depends(get_ap
     logger.debug(f"History for component {upn}: {history}")
     return history
 
-@router.get("/viewsaves/", response_model=dict[str, list[ComponentHistoryResponse]]) 
+@router.get("/viewsaves", response_model=dict[str, list[ComponentHistoryResponse]]) 
 @limiter.limit("20/minute") # limit to 20 requests per minute
 def view_saves(request: Request, api_key: str = Depends(get_api_key), db: Session = Depends(get_db)):
     """View the version history of every component that was once in the database. (AUTH REQUIRED)"""
@@ -472,9 +472,11 @@ def fetch_component(
         logger.error(f"Race condition timed out while waiting for other request to finish fetching {upn}.")
         raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail="Request timed out while waiting for component data, Please try again")
 
+    logger.debug(f"Lock acquired for {upn}, fetching component data from external resources...")
+
     # check database after getting the lock just in case
     if db.get(ComponentModel, upn) and not force_fetch:
-        logger.debug(f"Found {part_number} in database after acquiring lock, caching and returning result")
+        logger.success(f"Component {upn} fetched from database after acquiring lock, returning result")
         result = ComponentResponse.model_validate(db.get(ComponentModel, upn), from_attributes=True)
         set_cache(key, result)
         return result
